@@ -279,6 +279,10 @@ boot console that produced the log.
 
 Full log: `dist/qemu-serial.log` (also attached to the release).
 
+The numbers above come from the local verification build; CI rebuilds the same
+commit in an `ubuntu:20.04` container and attaches its own `SHA256SUMS.txt`,
+because the banner embeds the build time and the compiler patch level.
+
 ## 8. Reproducing in CI
 
 `.github/workflows/build.yml` runs the same scripts in an `ubuntu:20.04`
