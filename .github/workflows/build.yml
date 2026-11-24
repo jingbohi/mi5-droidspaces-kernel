@@ -113,7 +113,6 @@ jobs:
         run: |
           mkdir -p release
           cp artifacts/mi5-kernel-release/boot-mi5-droidspaces.img release/
-          cp artifacts/mi5-kernel-release/SHA256SUMS.txt release/SHA256SUMS.txt
           cp artifacts/mi5-kernel-release/config-diff-release.txt release/
           cp artifacts/mi5-kernel-release/crc-release.txt release/
           cp artifacts/mi5-kernel-release/verify-boot.txt release/
@@ -126,18 +125,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
           name: Mi 5 Droidspaces kernel ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
-          body: |
-            Xiaomi Mi 5 (gemini, MSM8996) kernel with the Droidspaces configuration layer.
-
-            Stock base: `MiCode/Xiaomi_Kernel_OpenSource` @ `${{ env.KERNEL_BRANCH }}`
-            (`3.18.71`, commit `${{ env.KERNEL_COMMIT }}`), repacked into the stock MIUI 10
-            boot image layout (gzip Image + 20 DTBs + stock ramdisk + Qualcomm certificate).
-
-            Flash: `fastboot flash boot boot-mi5-droidspaces.img` (bootloader unlocked).
-            Rollback: `fastboot flash boot <stock mi5_boot.img>`.
-
-            Included: `config-diff-release.txt` (every config change vs stock),
-            `crc-release.txt` (vendor module CRC check), `verify-boot.txt` (boot image
-            structure check), `qemu-serial.log` (QEMU boot of the same tree).
+          # Long-form notes live in the repo so they are reviewed like code.
+          body_path: .github/RELEASE_NOTES.md
           files: release/*
           fail_on_unmatched_files: true

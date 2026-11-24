@@ -179,6 +179,8 @@ patches/02-allow-crc-mismatch.patch      warn instead of refusing vendor modules
 scripts/build.sh, qemu_probe.sh  build + VM smoke test
 tools/                           defconfig generator, config/CRC/boot checkers,
                                  probe_init.c (initramfs init for the QEMU probe)
+.github/workflows/build.yml      CI: both variants, QEMU test, release on v* tags
+.github/RELEASE_NOTES.md         release body (rendered on the release page)
 docs/BUILD-AND-QEMU.md           evidence, verification log and design notes
 ```
 
