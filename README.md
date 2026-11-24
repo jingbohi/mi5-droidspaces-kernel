@@ -188,3 +188,8 @@ docs/BUILD-AND-QEMU.md           evidence, verification log and design notes
 
 * Xiaomi / MiCode for the `scorpio-o-oss` kernel source.
 * Droidspaces for the container runtime and its non-GKI kernel notes.
+
+## License
+
+The patches modify a GPL-2.0 kernel and are released under the same terms; the
+scripts and tools in this repository are provided under GPL-2.0 as well.
