@@ -246,6 +246,16 @@ PASS  fits 64 MiB boot partition  25326922 B
 result : PASS (0 failed)
 ```
 
+`tools/extract_boot_image.py` pulls the `Image` back out of a packed boot image,
+which is how the published file was re-checked after download:
+
+```
+kernel_size  : 22875252 B (gzip 13354763 + dtb 9520489)
+Image        : 35735040 B
+Linux version 3.18.71-perf-g4a0ef96 (mi5@droidspaces) (gcc version 9.4.0 (Ubuntu 9.4.0-1ubuntu1~20.04.2) ) #1 SMP PREEMPT ...
+vermagic     : 3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64
+```
+
 ## 7. QEMU probe
 
 `scripts/build.sh probe` builds the same tree with `config/probe.layer` and
