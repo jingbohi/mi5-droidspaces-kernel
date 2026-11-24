@@ -1,0 +1,3 @@
+# wlan.ko is the qca_cld_wlan wrapper; it imports no kernel symbols, so its
+# modprobe --dump-modversions output is empty.  Kept as a file so the module
+# shows up in the comparison tables with 0 imports.

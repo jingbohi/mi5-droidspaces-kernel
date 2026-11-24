@@ -36,7 +36,7 @@ thermal and debug option — keeps its stock value.
 modules keep **all** of their imported symbols. `patches/02-allow-crc-mismatch.patch`
 makes the loader warn instead of refusing when a genksyms checksum moved: adding the IPC
 namespace grows `struct task_struct`, which renumbers two thirds of the export table
-without changing any struct a driver embeds. `dmesg` therefore shows a few
+(6,328 of 9,378) without changing any struct a driver embeds. `dmesg` therefore shows a few
 `disagrees about version of symbol` warnings while the modules load — missing symbols
 are still fatal, and the build fails if a critical module loses an import.
 

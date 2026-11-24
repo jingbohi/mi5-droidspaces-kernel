@@ -163,6 +163,14 @@ No member was removed, reordered or resized anywhere. `file`, `dentry`,
 the two configurations. In other words: the checksums move because a struct that
 is *pointed to* grew, not because a struct a driver embeds changed.
 
+Diffing the stock and the release `Module.symvers` shows the size of the effect:
+
+```
+stock exports : 9378
+release       : 9410   (32 added: macvlan, IPv6 NAT; 0 removed)
+crc changed   : 6328   (67.5% of the 9378 common exports)
+```
+
 `patches/02-allow-crc-mismatch.patch` therefore turns
 
 ```

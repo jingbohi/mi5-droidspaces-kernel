@@ -12,8 +12,8 @@ Modules named in --strict must not have a single *missing* symbol: a missing
 export is a real ABI break and fails the build.
 
 CRC mismatches are reported but do not fail, because this kernel enables the IPC
-namespace, which grows struct ipc_namespace and shifts genksyms checksums for
-thousands of unrelated exports (patches/02-allow-crc-mismatch.patch makes the
+namespace, which adds fields to struct task_struct and shifts genksyms checksums
+for thousands of unrelated exports (patches/02-allow-crc-mismatch.patch makes the
 loader accept them).  --fail-on-mismatch restores the strict behaviour, e.g. for
 comparing against a build without that patch.
 """

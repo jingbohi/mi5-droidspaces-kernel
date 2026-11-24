@@ -90,8 +90,10 @@ signature.
 `IPC_NS` needs `SYSVIPC` and/or `POSIX_MQUEUE`, which add `sysvsem`, `sysvshm`
 and `mq_bytes` to `struct task_struct`. `task_struct` is reachable from
 `struct mutex`, which is embedded in `struct device`, `struct module`,
-`struct seq_file`, … so roughly two thirds of all exports get a new checksum
-even though **no driver-facing struct changed layout**.
+`struct seq_file`, … so **6,328 of the 9,378 exports (67.5%) get a new
+checksum** — measured by diffing the stock and the release `Module.symvers` —
+even though **no driver-facing struct changed layout**. 32 exports are new
+(macvlan, IPv6 NAT) and none disappeared.
 
 Measured on this tree (`tools/abidiff.py`, genksyms `-D` dumps of
 `drivers/pci/pci.o` and `fs/seq_file.o`): the *only* difference in
