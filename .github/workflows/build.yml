@@ -1,0 +1,143 @@
+name: build
+
+# Builds the Mi 5 (gemini) kernel in a Ubuntu 20.04 container so the compiler
+# matches the version this tree was verified with (aarch64-linux-gnu-gcc 9.4).
+#
+#   push to main / PR      -> build + upload artifacts
+#   tag v*                 -> build + publish a GitHub release
+#   workflow_dispatch      -> build, optionally publish a release
+#
+# Nothing here patches the phone: it produces boot-mi5-droidspaces.img only.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub release from this run"
+        type: boolean
+        default: false
+      tag:
+        description: "Release tag (only used when publish is true)"
+        type: string
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  KERNEL_COMMIT: a36928ce4998125d9e71d1377a52d68cfe156872
+  KERNEL_BRANCH: scorpio-o-oss
+  JOBS: 4
+  USE_CCACHE: 1
+
+jobs:
+  build:
+    name: build-${{ matrix.variant }}
+    runs-on: ubuntu-22.04
+    container: ubuntu:20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [release, probe]
+    steps:
+      - name: Install build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git \
+            build-essential gcc-aarch64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev \
+            python3 patch cpio xz-utils gzip kmod \
+            ccache qemu-system-arm
+
+      - uses: actions/checkout@v4
+
+      - name: Cache kernel source tarball
+        uses: actions/cache@v4
+        with:
+          path: .work/kernel.tar.gz
+          key: kernel-${{ env.KERNEL_BRANCH }}-${{ env.KERNEL_COMMIT }}
+
+      - name: Cache compiler output
+        uses: actions/cache@v4
+        with:
+          path: .work/ccache
+          key: ccache-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.variant }}-
+            ccache-
+
+      - name: Build ${{ matrix.variant }}
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.work/ccache
+          CCACHE_MAXSIZE: 2G
+        run: |
+          ccache --zero-stats || true
+          bash scripts/build.sh "${{ matrix.variant }}" "out-${{ matrix.variant }}"
+          ccache --show-stats || true
+
+      - name: QEMU smoke test
+        if: matrix.variant == 'probe'
+        run: |
+          bash scripts/qemu_probe.sh dist/Image-probe "dist/qemu-serial.log"
+          tail -60 dist/qemu-serial.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mi5-kernel-${{ matrix.variant }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          cp artifacts/mi5-kernel-release/boot-mi5-droidspaces.img release/
+          cp artifacts/mi5-kernel-release/SHA256SUMS.txt release/SHA256SUMS.txt
+          cp artifacts/mi5-kernel-release/config-diff-release.txt release/
+          cp artifacts/mi5-kernel-release/crc-release.txt release/
+          cp artifacts/mi5-kernel-release/verify-boot.txt release/
+          cp artifacts/mi5-kernel-probe/qemu-serial.log release/qemu-serial.log
+          cd release && sha256sum boot-mi5-droidspaces.img > SHA256SUMS.txt && cat SHA256SUMS.txt
+          ls -l
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          name: Mi 5 Droidspaces kernel ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          body: |
+            Xiaomi Mi 5 (gemini, MSM8996) kernel with the Droidspaces configuration layer.
+
+            Stock base: `MiCode/Xiaomi_Kernel_OpenSource` @ `${{ env.KERNEL_BRANCH }}`
+            (`3.18.71`, commit `${{ env.KERNEL_COMMIT }}`), repacked into the stock MIUI 10
+            boot image layout (gzip Image + 20 DTBs + stock ramdisk + Qualcomm certificate).
+
+            Flash: `fastboot flash boot boot-mi5-droidspaces.img` (bootloader unlocked).
+            Rollback: `fastboot flash boot <stock mi5_boot.img>`.
+
+            Included: `config-diff-release.txt` (every config change vs stock),
+            `crc-release.txt` (vendor module CRC check), `verify-boot.txt` (boot image
+            structure check), `qemu-serial.log` (QEMU boot of the same tree).
+          files: release/*
+          fail_on_unmatched_files: true

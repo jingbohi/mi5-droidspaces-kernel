@@ -1,0 +1,15 @@
+0xdaee4e11	module_layout
+0xfa4c61b0	crypto_rng_type
+0x51eafc8e	param_ops_int
+0x4d8e28ca	crypto_unregister_algs
+0xe4d080e2	crypto_register_algs
+0xdcb764ad	memset
+0x8f678b07	__stack_chk_guard
+0xdb7305a1	__stack_chk_fail
+0x449ad0a7	memcmp
+0x167c5967	print_hex_dump
+0x8ecc3449	crypto_alloc_base
+0xabbbd444	_raw_spin_unlock_bh
+0x27e1a049	printk
+0xf6f0ffed	_raw_spin_lock_bh
+0x36c3fb47	crypto_destroy_tfm

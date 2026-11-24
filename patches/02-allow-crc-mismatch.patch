@@ -1,0 +1,52 @@
+From: mi5-droidspaces-kernel <noreply@example.invalid>
+Subject: [PATCH] module: warn but accept CRC mismatches for stock vendor modules
+
+The stock ROM ships binary vendor modules (qca_cld_wlan.ko for WiFi,
+exfat.ko, br_netfilter.ko, the wil6210 stack, ...) built against Xiaomi's
+kernel with the original defconfig.
+
+Droidspaces needs the IPC namespace, which on 3.18 requires SYSVIPC and/or
+POSIX_MQUEUE.  Both add sysvsem, sysvshm and mq_bytes to struct task_struct, and
+genksyms hashes the whole reachable type graph, so task_struct -> mutex ->
+device, module, seq_file, ... renumbers thousands of exports that have nothing
+to do with IPC, including functions the vendor modules import (seq_read,
+pci_set_master, ...).
+
+Those exports still use the same calling convention and every struct a driver
+instantiates or dereferences (sk_buff, net_device, pci_dev, device, file,
+cfg80211_*, ...) keeps its stock layout; only the textual type graph above the
+changed struct differs.  Without this patch insmod rejects the modules and the
+phone loses WiFi, exFAT and packet filtering, so keep loading and print a
+rate-limited warning instead.
+
+If a vendor module ever misbehaves, these warnings are the first thing to check.
+
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -1172,9 +1172,23 @@
+ 	return 0;
+ 
+ bad_version:
+-	printk("%s: disagrees about version of symbol %s\n",
+-	       mod->name, symname);
+-	return 0;
++	/*
++	 * Enabling the IPC namespace (SYSVIPC/POSIX_MQUEUE) adds sysvsem,
++	 * sysvshm and mq_bytes to struct task_struct.  genksyms hashes the
++	 * whole reachable type graph, so task_struct -> mutex -> device,
++	 * module, seq_file, ... renumbers thousands of unrelated exports.
++	 * Those exports keep the same calling convention and every struct a
++	 * driver touches keeps its stock layout, so a mismatch here is not a
++	 * real ABI break for the stock vendor modules on this device.
++	 *
++	 * Refusing to load would leave the phone without WiFi
++	 * (qca_cld_wlan.ko), exFAT (exfat.ko) and packet filtering
++	 * (br_netfilter.ko), so warn once per symbol and keep going.
++	 */
++	if (printk_ratelimit())
++		pr_warn("%s: disagrees about version of symbol %s (ignored)\n",
++		       mod->name, symname);
++	return 1;
+ }
+ 
+ static inline int check_modstruct_version(Elf_Shdr *sechdrs,

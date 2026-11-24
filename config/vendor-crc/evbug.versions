@@ -1,0 +1,11 @@
+0xdaee4e11	module_layout
+0xb7582b9a	input_unregister_handler
+0xe706539c	input_register_handler
+0xb3cea6c4	kmalloc_caches
+0xe9275c90	input_open_device
+0x792b14b0	input_register_handle
+0x6601d000	kmem_cache_alloc_trace
+0x037a0cba	kfree
+0xd7c1cf22	input_unregister_handle
+0x1230e23f	input_close_device
+0x27e1a049	printk

@@ -1,0 +1,9 @@
+0xdaee4e11	module_layout
+0x1d96b6cc	platform_driver_unregister
+0x28505ae7	__platform_driver_register
+0x8f678b07	__stack_chk_guard
+0xdb7305a1	__stack_chk_fail
+0x6454a2db	devm_backlight_device_register
+0xc16ce994	_dev_info
+0xd431edd6	mutex_unlock
+0x831e9bce	mutex_lock

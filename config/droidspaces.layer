@@ -1,0 +1,90 @@
+# Options this kernel adds on top of the stock Xiaomi gemini_user_defconfig.
+#
+# One "SYMBOL=value" per line; value is y, n, m or a quoted string.
+# tools/mi5_config.py applies these on top of the stock defconfig and lets
+# `make olddefconfig` resolve dependencies, so an option that cannot exist on
+# 3.18 is reported by tools/check_config.py instead of silently ignored.
+#
+# Names are the 3.18 spelling, not the modern one:
+#   IP_NF_TARGET_MASQUERADE   (no NETFILTER_XT_TARGET_MASQUERADE)
+#   IP_NF_TARGET_REDIRECT     (no NF_NAT_REDIRECT)
+#   NF_NAT_IPV6 + IP6_NF_NAT  (no NF_CONNTRACK_NETLINK)
+
+# --- IPC mechanisms (containers expect shm/mqueue) -------------------------
+# IPC_NS depends on one of these on 3.18.  Both add fields to struct
+# task_struct (sysvsem/sysvshm/mq_bytes) and genksyms hashes the whole type
+# graph, so most exports get a new checksum even though no driver-facing struct
+# changes layout; patches/02-allow-crc-mismatch.patch keeps the stock vendor
+# modules loading.  See docs/BUILD-AND-QEMU.md section 5.
+SYSVIPC=y
+POSIX_MQUEUE=y
+
+# --- namespaces -----------------------------------------------------------
+# USER_NS stays off on purpose: Droidspaces runs as root and only lists user
+# namespaces as optional, while enabling them on 3.18 would add the whole
+# unprivileged-userns attack surface the stock ROM deliberately disabled.
+NAMESPACES=y
+PID_NS=y
+UTS_NS=y
+IPC_NS=y
+SECCOMP=y
+NET_NS=y
+
+# --- cgroups (v1 only on 3.18) --------------------------------------------
+CGROUPS=y
+CGROUP_DEVICE=y
+CGROUP_SCHED=y
+FAIR_GROUP_SCHED=y
+CFS_BANDWIDTH=y
+CGROUP_FREEZER=y
+CGROUP_NET_PRIO=y
+MEMCG=y
+MEMCG_SWAP=y
+MEMCG_SWAP_ENABLED=y
+CGROUP_CPUACCT=y
+
+# --- filesystems ----------------------------------------------------------
+DEVTMPFS=y
+DEVTMPFS_MOUNT=n
+TMPFS_XATTR=y
+TMPFS_POSIX_ACL=y
+OVERLAY_FS=y
+
+# --- networking -----------------------------------------------------------
+VETH=y
+BRIDGE=y
+MACVLAN=y
+NETFILTER=y
+NETFILTER_ADVANCED=y
+NF_CONNTRACK=y
+IP_NF_IPTABLES=y
+IP_NF_FILTER=y
+IP_NF_NAT=y
+IP_NF_TARGET_MASQUERADE=y
+IP_NF_TARGET_REDIRECT=y
+NETFILTER_XT_TARGET_TCPMSS=y
+NETFILTER_XT_MATCH_ADDRTYPE=y
+IP_ADVANCED_ROUTER=y
+IP_MULTIPLE_TABLES=y
+IP6_NF_IPTABLES=y
+IP6_NF_FILTER=y
+IP6_NF_MANGLE=y
+IP6_NF_NAT=y
+IP6_NF_TARGET_MASQUERADE=y
+NF_NAT_IPV6=y
+NF_TABLES=y
+NFT_NAT=y
+NFT_MASQ=y
+
+# --- Android specific -----------------------------------------------------
+# Stock sets this (default ANDROID) and it only lets group AID_INET open
+# sockets; container services run as plain uids and would get EACCES.
+ANDROID_PARANOID_NETWORK=n
+
+# --- version / build ------------------------------------------------------
+# Must reproduce the stock vermagic exactly, or every vendor .ko is rejected:
+#   3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64
+LOCALVERSION="-perf-g4a0ef96"
+LOCALVERSION_AUTO=n
+IKCONFIG=y
+IKCONFIG_PROC=y

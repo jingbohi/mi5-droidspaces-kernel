@@ -1,0 +1,14 @@
+# Extra options appended for the QEMU probe build only.
+#
+# QEMU's "-M virt" machine has a PL011 UART, which the phone does not use.
+# These options stay out of the release config so the flashable Image contains
+# exactly the phone's drivers plus the Droidspaces layer.
+ARM_AMBA=y
+SERIAL_AMBA_PL011=y
+SERIAL_AMBA_PL011_CONSOLE=y
+SERIAL_EARLYCON=y
+
+# QEMU has no Qualcomm secure monitor, so the early PRNG SCM call
+# (drivers/soc/qcom/early_random.c, "smc #0") traps and panics in setup_arch.
+# Without it the weak stub in arch/arm64/kernel/setup.c is used instead.
+QCOM_EARLY_RANDOM=n

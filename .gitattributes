@@ -1,0 +1,9 @@
+# Everything here is consumed by bash, patch(1) and the kernel build, which all
+# run on Linux (CI container / WSL).  Keep LF even when the repo is checked out
+# on Windows.
+* text=auto eol=lf
+
+# Binary fixtures
+*.img binary
+*.jpg binary
+*.png binary

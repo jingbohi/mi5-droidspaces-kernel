@@ -1,0 +1,42 @@
+From: mi5-droidspaces-kernel <noreply@example.invalid>
+Subject: [PATCH] xt_qtaguid: keep live iface stats, but only for init_net devices
+
+Droidspaces' non-GKI patch set removes the dev_get_stats() call from
+/proc/net/xt_qtaguid/iface_stat_fmt entirely, because reading statistics of a
+network device that lives in a container network namespace can dereference a
+netdev that is being torn down by that namespace.
+
+Dropping the call also drops the live rx/tx counters of every phone interface,
+which is a regression the stock ROM does not have (netd reads this file for
+per-interface statistics on Android 8).
+
+Instead, only call dev_get_stats() for devices that are still in init_net.  All
+interfaces the phone creates itself are init_net devices, so their output is
+unchanged; devices moved into a container namespace report zeros, exactly like
+inactive interfaces did before.
+
+Signed-off-by: mi5-droidspaces-kernel <noreply@example.invalid>
+---
+ net/netfilter/xt_qtaguid.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+--- a/net/netfilter/xt_qtaguid.c
++++ b/net/netfilter/xt_qtaguid.c
+@@ -24,6 +24,7 @@
+ #include <linux/skbuff.h>
+ #include <linux/workqueue.h>
+ #include <net/addrconf.h>
++#include <net/net_namespace.h>
+ #include <net/sock.h>
+ #include <net/tcp.h>
+ #include <net/udp.h>
+@@ -748,7 +749,8 @@
+ 
+ 	iface_entry = list_entry(v, struct iface_stat, list);
+ 
+-	if (iface_entry->active) {
++	if (iface_entry->active &&
++	    net_eq(dev_net(iface_entry->net_dev), &init_net)) {
+ 		stats = dev_get_stats(iface_entry->net_dev,
+ 				      &dev_stats);
+ 	} else {
