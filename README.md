@@ -12,12 +12,34 @@ driver keeps working.
 | Source | `MiCode/Xiaomi_Kernel_OpenSource` branch `scorpio-o-oss`, `3.18.71`, commit `a36928c` |
 | Target vermagic | `3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64` |
 | Toolchain | `aarch64-linux-gnu-gcc` 9.4 (Ubuntu 20.04) |
+| Release | [v1.0.0](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.0) — `boot-mi5-droidspaces.img` plus every verification report |
 
 The ROM's own kernel commit `g4a0ef96` is not in the public tree, so the version
 string is pinned with `CONFIG_LOCALVERSION="-perf-g4a0ef96"` +
-`CONFIG_LOCALVERSION_AUTO=n`. Module symbol CRCs from this tree match the stock
-kernel's (see [docs/BUILD-AND-QEMU.md](docs/BUILD-AND-QEMU.md)), so the shipped
-`qca_cld_wlan.ko`, `exfat.ko`, `br_netfilter.ko`, `wil6210.ko`, … load unchanged.
+`CONFIG_LOCALVERSION_AUTO=n`. Built from the untouched defconfig, this tree
+reproduces the ROM kernel's symbol checksums exactly (1,082 of 1,085 imported
+symbols match), which is the evidence that it is the same source the ROM was
+built from — see [the CRC section](#vendor-module-compatibility-the-crc-question).
+
+## Verified
+
+The release is built by CI (`.github/workflows/build.yml`) from the same commit
+these scripts produce locally, and its artifacts were re-checked with
+`tools/verify_boot_mi5.py` and `tools/import_table.py` after download:
+
+| Check | Result |
+|---|---|
+| `Image` | 35,735,040 B |
+| boot image | 25,326,922 B (sha256 in `SHA256SUMS.txt`) |
+| boot image structure | 26 / 26 checks PASS — DTBs, ramdisk, certificate, cmdline and addresses byte-identical to stock |
+| config diff vs stock | 26 options (full list in `config-diff-release.txt`) |
+| kernel exports | 9,410 symbols |
+| vendor module CRC | 20 missing imports, all from the three factory test modules that also fail on stock; `br_netfilter`, `exfat`, `qca_cld_wlan`, `wil6210` import everything |
+| QEMU boot | reaches userspace, 6 / 6 markers PASS (`qemu-serial.log`) |
+
+The QEMU test boots the same tree with a PL011 console; it cannot exercise
+MSM8996 hardware, but it does run the decompressor, page tables, SMP bring-up,
+every initcall and a userspace process. Details: [docs/BUILD-AND-QEMU.md](docs/BUILD-AND-QEMU.md).
 
 ## Why this works on a stock ROM
 
