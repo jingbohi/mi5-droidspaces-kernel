@@ -44,6 +44,9 @@ else
 fi
 
 mkdir -p "$ROOT/.work" "$DIST"
+# `make -C $SRC O=<dir>` resolves a relative output dir against $SRC, not against
+# the caller, so normalise everything to absolute paths first.
+DIST=$(cd "$DIST" && pwd)
 
 if [ ! -f "$SRC/Makefile" ]; then
     if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
@@ -73,6 +76,7 @@ if [ ! -f "$SRC/Makefile" ]; then
 fi
 
 echo "== kernel tree: $(sed -n 's/^\(VERSION\|PATCHLEVEL\|SUBLEVEL\) = \(.*\)/\1=\2/p' "$SRC/Makefile" | tr '\n' ' ')"
+SRC=$(cd "$SRC" && pwd)
 
 if [ -f "$SRC/.patched" ]; then
     echo "== patches already applied"
@@ -95,11 +99,13 @@ cd "$ROOT"
 python3 tools/mi5_config.py --src "$SRC" --out-name "$DEFCONFIG" $EXTRA
 
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
 make -C "$SRC" O="$OUT" CC="$CC_CMD" "$DEFCONFIG" >/dev/null
 make -C "$SRC" O="$OUT" CC="$CC_CMD" olddefconfig >/dev/null
 # prepare generates include/config/kernel.release, which check_config.py reads;
 # on a fresh tree it does not exist right after olddefconfig.
 make -C "$SRC" O="$OUT" CC="$CC_CMD" prepare >/dev/null
+[ -f "$OUT/.config" ] || { echo "!! $OUT/.config was not generated" >&2; exit 1; }
 cp -f "$OUT/.config" "$OUT/config-$VARIANT.txt"
 
 python3 tools/check_config.py --config "$OUT/.config" \
