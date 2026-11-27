@@ -131,6 +131,14 @@ python3 tools/check_config.py --config "$OUT/.config" \
     --stock config/stock-resolved.config \
     --diff-out "$DIST/config-diff-$VARIANT.txt"
 
+# The ROM's .ko files are signed with the key of Xiaomi's own build; with
+# MODULE_SIG_FORCE=y the loader rejects every one of them with ENOKEY and the
+# phone boots without WiFi, exFAT or wil6210.  See config/droidspaces.layer.
+if grep -qx 'CONFIG_MODULE_SIG_FORCE=y' "$OUT/.config"; then
+    echo "!! CONFIG_MODULE_SIG_FORCE=y: stock vendor modules would not load" >&2
+    exit 1
+fi
+
 echo "== building Image ($JOBS jobs)"
 make -C "$SRC" O="$OUT" CC="$CC_CMD" -j"$JOBS" Image 2>&1 | tee "$OUT/build.log"
 
@@ -154,12 +162,21 @@ python3 tools/crc_compare.py --symvers "$OUT/Module.symvers" \
     --strict qca_cld_wlan,wil6210,exfat,br_netfilter | tee "$DIST/crc-$VARIANT.txt"
 
 if [ "$VARIANT" = "release" ]; then
-    echo "== packing boot image"
-    python3 tools/pack_boot_mi5.py --template bootimg/mi5_boot.img \
-        --image "$IMAGE" --out "$DIST/boot-mi5-droidspaces.img"
-    python3 tools/verify_boot_mi5.py --boot "$DIST/boot-mi5-droidspaces.img" \
-        --template bootimg/mi5_boot.img --image "$IMAGE" | tee "$DIST/verify-boot.txt"
-    ( cd "$DIST" && sha256sum boot-mi5-droidspaces.img Image-release > SHA256SUMS.txt )
+    # The CN and the global MIUI 10 ROM ship the same kernel Image with a
+    # different boot wrapper (ramdisk default.prop + sepolicy, DTB order), so
+    # one Image is packed into both stock templates.
+    echo "== packing boot images"
+    for spec in "mi5_boot.img:boot-mi5-droidspaces.img:verify-boot.txt" \
+                "mi5_boot_g.img:boot-mi5-droidspaces-global.img:verify-boot-global.txt"; do
+        IFS=: read -r tpl out verify <<<"$spec"
+        echo "-- $tpl -> $out"
+        python3 tools/pack_boot_mi5.py --template "bootimg/$tpl" \
+            --image "$IMAGE" --out "$DIST/$out"
+        python3 tools/verify_boot_mi5.py --boot "$DIST/$out" \
+            --template "bootimg/$tpl" --image "$IMAGE" | tee "$DIST/$verify"
+    done
+    ( cd "$DIST" && sha256sum boot-mi5-droidspaces.img \
+        boot-mi5-droidspaces-global.img Image-release > SHA256SUMS.txt )
     cat "$DIST/SHA256SUMS.txt"
 fi
 

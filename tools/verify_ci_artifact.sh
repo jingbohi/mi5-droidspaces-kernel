@@ -1,5 +1,5 @@
 #!/bin/bash
-# Verify a downloaded CI artifact against the stock template, the same way the
+# Verify a downloaded CI artifact against the stock templates, the same way the
 # published release was checked.
 #
 #   tools/verify_ci_artifact.sh <artifact-dir>
@@ -8,20 +8,25 @@ ART=${1:?usage: verify_ci_artifact.sh <artifact-dir>}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 
-BOOT="$ART/boot-mi5-droidspaces.img"
 IMG="$ART/Image-release"
 
 echo "== files"
-ls -l "$BOOT" "$IMG" 2>&1
+ls -l "$ART"/boot-mi5-droidspaces*.img "$IMG" 2>&1
 echo
 echo "== sha256"
-sha256sum "$BOOT"
+sha256sum "$ART"/boot-mi5-droidspaces*.img
 echo
-echo "== structure check (26 invariants)"
-python3 tools/verify_boot_mi5.py --boot "$BOOT" --template bootimg/mi5_boot.img --image "$IMG"
-echo
-echo "== byte-level audit vs the stock boot image"
-python3 tools/boot_image_audit.py bootimg/mi5_boot.img "$BOOT"
+echo "== structure check (26 invariants) + byte-level audit"
+for pair in "boot-mi5-droidspaces.img:mi5_boot.img" \
+            "boot-mi5-droidspaces-global.img:mi5_boot_g.img"; do
+    BOOT="$ART/${pair%%:*}"
+    TEMPLATE="bootimg/${pair##*:}"
+    [ -f "$BOOT" ] || { echo "-- ${pair%%:*}: not present, skipped"; continue; }
+    echo
+    echo "-- ${pair%%:*} vs $TEMPLATE"
+    python3 tools/verify_boot_mi5.py --boot "$BOOT" --template "$TEMPLATE" --image "$IMG"
+    python3 tools/boot_image_audit.py "$TEMPLATE" "$BOOT"
+done
 echo
 echo "== kernel identity"
 strings -a -n 10 "$IMG" | grep -m1 '^Linux version' || true

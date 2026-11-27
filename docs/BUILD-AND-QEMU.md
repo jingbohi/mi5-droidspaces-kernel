@@ -151,8 +151,8 @@ appends it to the stock defconfig, `tools/check_config.py` re-resolves the resul
 and prints the diff. Release build:
 
 ```
-layer options: 53 forced
-config diff vs stock: 26 option(s)
+layer options: 54 forced
+config diff vs stock: 27 option(s)
 RESULT: PASS
 ```
 
@@ -170,6 +170,7 @@ CONFIG_LOCALVERSION                     "-perf" -> "-perf-g4a0ef96"
 CONFIG_LOCALVERSION_AUTO                   y  -> n
 CONFIG_MACVLAN                             n  -> y
 CONFIG_MEMCG_SWAP_ENABLED                  n  -> y
+CONFIG_MODULE_SIG_FORCE                    y  -> n
 CONFIG_NETFILTER_XT_MATCH_ADDRTYPE         n  -> y
 CONFIG_NFT_MASQ                            n  -> y
 CONFIG_NFT_NAT                             n  -> y
@@ -275,7 +276,39 @@ fail on the stock kernel (see §3). Every module the ROM actually loads —
 including `qca_cld_wlan.ko` (WiFi) and `wil6210.ko` (11ad) — keeps all of its
 imports and loads with a warning in `dmesg` instead of being rejected.
 
+## 5a. Vendor module signatures (hardware evidence)
+
+The loader checks a module's signature before it looks at vermagic or CRCs, so this is
+the first thing that has to work. Xiaomi's defconfig sets `MODULE_SIG_FORCE=y`, and each
+MIUI build signs its `.ko` files with the key generated for that build; only the shipped
+`Image` carries the matching public key. A rebuilt kernel therefore rejects every factory
+module with `-ENOKEY`, which the WiFi HAL prints as:
+
+```
+android.hardware.wifi@1.0-service: finit_module return: -1: Required key not available
+android.hardware.wifi@1.0-service: Failed to load WiFi driver
+```
+
+Measured with `fastboot boot` (RAM only) plus `/sys/module` and `logcat`:
+
+| Kernel | `/sys/module` after boot | after switching WiFi on |
+|---|---|---|
+| ROM's own global `boot.img` (OAAMIXM) | `exfat` | `wlan`, HAL stays up |
+| v1.0.1, `MODULE_SIG_FORCE=y` | no external module | `Failed to load WiFi driver`, no `wlan` |
+| v1.0.2, `MODULE_SIG_FORCE=n` | `exfat` | `wlan`, HAL stays up |
+
+`/sys/module` is the cheap check: `exfat.ko` is insmod'ed by `init.qcom.rc` on every boot,
+so if it is missing, module loading is broken before WiFi is even involved.
+
+`config/droidspaces.layer` sets `MODULE_SIG_FORCE=n` — the ROM's own kernel does not
+enforce signatures either — and `scripts/build.sh` aborts if the resolved `.config` has
+`CONFIG_MODULE_SIG_FORCE=y` again. Modules loaded this way taint the kernel
+(`module verification failed`); the CRC warnings described in §5 follow.
+
 ## 6. Release image
+
+Numbers below are from the v1.0.1 build; v1.0.2 changes the config, so its sizes and
+sha256 are the ones in the release's `SHA256SUMS.txt` and `verify-boot*.txt`.
 
 ```
 == building Image (4 jobs)
@@ -384,20 +417,22 @@ because the banner embeds the build time and the compiler patch level.
 container, caches the kernel tarball, the gcc 4.9 prebuilt and ccache, builds
 `release` and `probe` in parallel, runs the QEMU smoke test on the probe image,
 and uploads `dist/` as artifacts. Pushing a `v*` tag publishes a release with the
-boot image, `config-diff-release.txt`, `crc-release.txt`, `verify-boot.txt` and
-`qemu-serial.log`.
+CN and the global boot image, `config-diff-release.txt`, `crc-release.txt`,
+`verify-boot.txt`, `verify-boot-global.txt` and `qemu-serial.log`.
 
 ## 9. Flash and rollback
 
 ```bash
-fastboot flash boot dist/boot-mi5-droidspaces.img
+fastboot flash boot dist/boot-mi5-droidspaces-global.img   # global ROM
+fastboot flash boot dist/boot-mi5-droidspaces.img          # CN ROM
 fastboot reboot
 ```
 
-The stock image is in `bootimg/mi5_boot.img`:
+The stock images are in `bootimg/mi5_boot.img` (CN) and `bootimg/mi5_boot_g.img` (global):
 
 ```bash
-fastboot flash boot bootimg/mi5_boot.img     # rollback
+fastboot flash boot bootimg/mi5_boot.img     # CN rollback
+fastboot flash boot bootimg/mi5_boot_g.img   # global rollback
 ```
 
 A bad kernel is recoverable from `fastboot` (Mi 5 enters fastboot with Vol- +

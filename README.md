@@ -8,11 +8,24 @@ driver keeps working.
 | | |
 |---|---|
 | Device | Xiaomi Mi 5 `gemini` (MSM8996) |
-| ROM base | `mi5_gemini_images_V10.2.1.0.OAACNXM_20181224.0000.00_8.0_cn` |
+| ROM base | MIUI 10 CN `V10.2.1.0.OAACNXM` and global `V10.2.2.0.OAAMIXM` (identical kernels, different boot wrapper) |
 | Source | `MiCode/Xiaomi_Kernel_OpenSource` branch `scorpio-o-oss`, `3.18.71`, commit `a36928c` |
 | Target vermagic | `3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64` |
 | Toolchain | AOSP `aarch64-linux-android-4.9` prebuilt (`gcc 4.9.x 20150123`), fetched by `scripts/fetch-toolchain.sh` |
-| Release | [v1.0.1](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.1) — `boot-mi5-droidspaces.img` plus every verification report |
+| Release | [v1.0.2](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.2) — one `Image`, a CN and a global boot image, plus every verification report |
+
+## Which image to flash
+
+```sh
+adb shell getprop ro.build.fingerprint
+# ...V10.2.1.0.OAACNXM...  -> boot-mi5-droidspaces.img          (CN)
+# ...V10.2.2.0.OAAMIXM...  -> boot-mi5-droidspaces-global.img   (global)
+```
+
+The two MIUI 10 builds ship the **same kernel** — same commit `g4a0ef96`, same config,
+same compiler, both `Image` files 33,644,544 B — so this project builds one `Image` and
+packs it into both stock templates. Only the wrapper differs: `default.prop` (ROM
+version), `sepolicy`, and the order of the 20 DTBs.
 
 The ROM's own kernel commit `g4a0ef96` is not in the public tree, so the version
 string is pinned with `CONFIG_LOCALVERSION="-perf-g4a0ef96"` +
@@ -29,12 +42,13 @@ these scripts produce locally, and its artifacts were re-checked with
 
 | Check | Result |
 |---|---|
-| `Image` | 33,648,640 B |
-| boot image | 24,700,234 B (sha256 in `SHA256SUMS.txt`) |
-| boot image structure | 26 / 26 checks PASS — DTBs, ramdisk, certificate, cmdline and addresses byte-identical to stock |
-| config diff vs stock | 26 options (full list in `config-diff-release.txt`) |
+| `Image` | one Image, ~33.6 MB, packed into both templates |
+| boot images | `boot-mi5-droidspaces.img` and `boot-mi5-droidspaces-global.img`, ~24.7 MB each (sha256 in `SHA256SUMS.txt`) |
+| boot image structure | 26 / 26 checks PASS on both — DTBs, ramdisk, certificate, cmdline and addresses byte-identical to their stock template |
+| config diff vs stock | 27 options (full list in `config-diff-release.txt`) |
 | kernel exports | 9,410 symbols |
 | vendor module CRC | 20 missing imports, all from the three factory test modules that also fail on stock; `br_netfilter`, `exfat`, `qca_cld_wlan`, `wil6210` import everything |
+| vendor modules on hardware | `exfat.ko` at boot, `qca_cld_wlan.ko` when WiFi is switched on — the modules the ROM ships, unmodified |
 | QEMU boot | reaches userspace, 6 / 6 markers PASS (`qemu-serial.log`) |
 
 The QEMU test boots the same tree with a PL011 console; it cannot exercise
@@ -102,6 +116,7 @@ single source of truth; the CI prints the full resolved diff
 | Filesystems | `DEVTMPFS` (`DEVTMPFS_MOUNT` stays off), `OVERLAY_FS` |
 | Network | `MACVLAN`, `NF_TABLES`/`NFT_NAT`/`NFT_MASQ`, IPv6 NAT (`IP6_NF_NAT`, `NF_NAT_IPV6`), `XT_TARGET_TCPMSS`, `XT_MATCH_ADDRTYPE` |
 | Android | `ANDROID_PARANOID_NETWORK=n` — otherwise non-root uids cannot `socket()` inside a container |
+| Vendor modules | `MODULE_SIG_FORCE=n` — the ROM's `.ko` files are signed with Xiaomi's build key, which a rebuilt kernel does not have (see [below](#vendor-module-signatures)) |
 | Versioning | `LOCALVERSION="-perf-g4a0ef96"`, `LOCALVERSION_AUTO=n`, `IKCONFIG_PROC=y` |
 
 `ANDROID_PARANOID_NETWORK=n` removes the extra group-`AID_INET` gate on
@@ -109,6 +124,33 @@ single source of truth; the CI prints the full resolved diff
 kernel. If you would rather keep the stock gate, flip that one line in
 `config/droidspaces.layer` — Droidspaces will then need services to run with
 `inet` group membership.
+
+## Vendor module signatures
+
+The stock defconfig enforces module signatures (`CONFIG_MODULE_SIG_FORCE=y`), and every
+`.ko` of a MIUI build is signed with the key generated for that particular build. Only
+the stock `Image` carries the matching public key, so a rebuilt kernel rejects every
+factory module:
+
+```
+android.hardware.wifi@1.0-service: finit_module return: -1: Required key not available
+android.hardware.wifi@1.0-service: Failed to load WiFi driver
+```
+
+Hardware evidence (`fastboot boot`, RAM only, nothing written to flash):
+
+| Kernel | `/sys/module` | WiFi |
+|---|---|---|
+| ROM's own global `boot.img` | `exfat` at boot, `wlan` after switching WiFi on | works |
+| v1.0.1 (`MODULE_SIG_FORCE=y`) | no external module at all | `Failed to load WiFi driver` |
+| v1.0.2 (`MODULE_SIG_FORCE=n`) | `exfat`, `wlan` | works |
+
+v1.0.1 booted and looked healthy, but it silently had no WiFi, no exFAT and no `wil6210`,
+because the loader stopped at the signature check before it ever looked at the module.
+`config/droidspaces.layer` now sets `MODULE_SIG_FORCE=n` — the ROM's own kernel does not
+enforce signatures either — and `scripts/build.sh` fails the build if the option comes
+back. Modules loaded this way taint the kernel with `module verification failed`; nothing
+else changes.
 
 ## Vendor module compatibility (the CRC question)
 
@@ -167,6 +209,7 @@ the probe `gcc-aarch64-linux-gnu` + `qemu-system-arm` + `cpio`):
 ```bash
 scripts/fetch-toolchain.sh      # AOSP gcc 4.9 prebuilt -> .work/
 scripts/build.sh release        # out-release/  dist/boot-mi5-droidspaces.img
+                                #               dist/boot-mi5-droidspaces-global.img
 scripts/build.sh probe          # out-probe/    dist/Image-probe (PL011 for QEMU)
 scripts/qemu_probe.sh dist/Image-probe qemu-serial.log
 ```
@@ -185,14 +228,17 @@ publishes a release when a `v*` tag is pushed.
 ## Flash and rollback
 
 ```bash
+# global ROM (...MIXM)                      # CN ROM (...CNXM)
+fastboot flash boot boot-mi5-droidspaces-global.img
 fastboot flash boot boot-mi5-droidspaces.img
 fastboot reboot
 ```
 
-Keep the stock image: `bootimg/mi5_boot.img` (this repo is the stock template).
+Both stock templates are in the repo, so rollback never needs a ROM download:
 
 ```bash
-fastboot flash boot bootimg/mi5_boot.img     # rollback
+fastboot flash boot bootimg/mi5_boot_g.img   # global rollback
+fastboot flash boot bootimg/mi5_boot.img     # CN rollback
 ```
 
 A boot loop is recoverable from `fastboot` (Mi 5 boots to fastboot with
@@ -206,7 +252,8 @@ config/droidspaces.layer         the option delta (single source of truth)
 config/probe.layer               PL011 + no Qualcomm secure monitor (QEMU only)
 config/vendor-crc/*.versions     symbol CRCs of the stock vendor modules
 config/stock-resolved.config     stock `make olddefconfig` result (diff base)
-bootimg/mi5_boot.img             stock boot image used as repack template
+bootimg/mi5_boot.img             stock CN boot image used as repack template
+bootimg/mi5_boot_g.img           stock global boot image used as repack template
 patches/01-fix-xt-qtaguid-panic.patch    non-GKI crash fix, stock behaviour kept
 patches/02-allow-crc-mismatch.patch      warn instead of refusing vendor modules
 scripts/fetch-toolchain.sh       fetch the gcc 4.9 prebuilt into .work/

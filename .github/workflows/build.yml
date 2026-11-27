@@ -11,7 +11,8 @@ name: build
 #   tag v*                 -> build + publish a GitHub release
 #   workflow_dispatch      -> build, optionally publish a release
 #
-# Nothing here patches the phone: it produces boot-mi5-droidspaces.img only.
+# Nothing here patches the phone: it produces boot-mi5-droidspaces.img (CN ROM)
+# and boot-mi5-droidspaces-global.img (global ROM) from one kernel Image.
 
 on:
   push:
@@ -128,11 +129,14 @@ jobs:
         run: |
           mkdir -p release
           cp artifacts/mi5-kernel-release/boot-mi5-droidspaces.img release/
+          cp artifacts/mi5-kernel-release/boot-mi5-droidspaces-global.img release/
           cp artifacts/mi5-kernel-release/config-diff-release.txt release/
           cp artifacts/mi5-kernel-release/crc-release.txt release/
           cp artifacts/mi5-kernel-release/verify-boot.txt release/
+          cp artifacts/mi5-kernel-release/verify-boot-global.txt release/
           cp artifacts/mi5-kernel-probe/qemu-serial.log release/qemu-serial.log
-          cd release && sha256sum boot-mi5-droidspaces.img > SHA256SUMS.txt && cat SHA256SUMS.txt
+          cd release && sha256sum boot-mi5-droidspaces.img \
+            boot-mi5-droidspaces-global.img > SHA256SUMS.txt && cat SHA256SUMS.txt
           ls -l
 
       - name: Publish release

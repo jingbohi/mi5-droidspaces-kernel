@@ -81,6 +81,17 @@ NFT_MASQ=y
 # sockets; container services run as plain uids and would get EACCES.
 ANDROID_PARANOID_NETWORK=n
 
+# --- vendor modules -------------------------------------------------------
+# The stock defconfig enforces module signatures (MODULE_SIG_FORCE=y) and every
+# .ko of a MIUI build is signed with the key generated for that build.  Only the
+# stock Image carries the matching public key, so a rebuilt kernel rejects every
+# factory module with "Required key not available" (ENOKEY): no WiFi
+# (qca_cld_wlan.ko), no exFAT, no wil6210.  Measured on hardware -- the stock
+# global boot.img loads exfat.ko and qca_cld_wlan.ko, v1.0.1 did not load either.
+# The ROM's own kernel evidently does not enforce, so neither do we: the modules
+# load and the kernel is tainted with "module verification failed".
+MODULE_SIG_FORCE=n
+
 # --- version / build ------------------------------------------------------
 # Must reproduce the stock vermagic exactly, or every vendor .ko is rejected:
 #   3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64
