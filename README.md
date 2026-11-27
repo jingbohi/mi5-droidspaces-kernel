@@ -12,7 +12,7 @@ driver keeps working.
 | Source | `MiCode/Xiaomi_Kernel_OpenSource` branch `scorpio-o-oss`, `3.18.71`, commit `a36928c` |
 | Target vermagic | `3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64` |
 | Toolchain | AOSP `aarch64-linux-android-4.9` prebuilt (`gcc 4.9.x 20150123`), fetched by `scripts/fetch-toolchain.sh` |
-| Release | [v1.0.2](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.2) — one `Image`, a CN and a global boot image, plus every verification report |
+| Release | [v1.0.0](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.0) — one `Image`, a CN and a global boot image, plus every verification report |
 
 ## Which image to flash
 
@@ -49,6 +49,7 @@ these scripts produce locally, and its artifacts were re-checked with
 | kernel exports | 9,410 symbols |
 | vendor module CRC | 20 missing imports, all from the three factory test modules that also fail on stock; `br_netfilter`, `exfat`, `qca_cld_wlan`, `wil6210` import everything |
 | vendor modules on hardware | `exfat.ko` at boot, `qca_cld_wlan.ko` when WiFi is switched on — the modules the ROM ships, unmodified |
+| WiFi on hardware | `wificond` stays up, `wlan0` is UP, associates with a 5 GHz AP at 130 Mbps |
 | QEMU boot | reaches userspace, 6 / 6 markers PASS (`qemu-serial.log`) |
 
 The QEMU test boots the same tree with a PL011 console; it cannot exercise
@@ -115,7 +116,7 @@ single source of truth; the CI prints the full resolved diff
 | Cgroups (v1) | `CGROUP_DEVICE`, `MEMCG_SWAP_ENABLED` (the rest was already on) |
 | Filesystems | `DEVTMPFS` (`DEVTMPFS_MOUNT` stays off), `OVERLAY_FS` |
 | Network | `MACVLAN`, `NF_TABLES`/`NFT_NAT`/`NFT_MASQ`, IPv6 NAT (`IP6_NF_NAT`, `NF_NAT_IPV6`), `XT_TARGET_TCPMSS`, `XT_MATCH_ADDRTYPE` |
-| Android | `ANDROID_PARANOID_NETWORK=n` — otherwise non-root uids cannot `socket()` inside a container |
+| Android | `ANDROID_PARANOID_NETWORK=n` so non-root uids can `socket()` inside a container, plus `patches/03` which restores the AID → capability mapping the same `#ifdef` also removes (see [WiFi](#wifi-the-aid-capability-mapping)) |
 | Vendor modules | `MODULE_SIG_FORCE=n` — the ROM's `.ko` files are signed with Xiaomi's build key, which a rebuilt kernel does not have (see [below](#vendor-module-signatures)) |
 | Versioning | `LOCALVERSION="-perf-g4a0ef96"`, `LOCALVERSION_AUTO=n`, `IKCONFIG_PROC=y` |
 
@@ -142,15 +143,63 @@ Hardware evidence (`fastboot boot`, RAM only, nothing written to flash):
 | Kernel | `/sys/module` | WiFi |
 |---|---|---|
 | ROM's own global `boot.img` | `exfat` at boot, `wlan` after switching WiFi on | works |
-| v1.0.1 (`MODULE_SIG_FORCE=y`) | no external module at all | `Failed to load WiFi driver` |
-| v1.0.2 (`MODULE_SIG_FORCE=n`) | `exfat`, `wlan` | works |
+| stock value, `MODULE_SIG_FORCE=y` | no external module at all | `Failed to load WiFi driver` |
+| this kernel, `MODULE_SIG_FORCE=n` | `exfat`, `cfg80211`, `wlan` | modules load |
 
-v1.0.1 booted and looked healthy, but it silently had no WiFi, no exFAT and no `wil6210`,
-because the loader stopped at the signature check before it ever looked at the module.
-`config/droidspaces.layer` now sets `MODULE_SIG_FORCE=n` — the ROM's own kernel does not
-enforce signatures either — and `scripts/build.sh` fails the build if the option comes
-back. Modules loaded this way taint the kernel with `module verification failed`; nothing
-else changes.
+A kernel that keeps the stock value boots and looks healthy, but silently has no WiFi,
+no exFAT and no `wil6210`, because the loader stops at the signature check before it
+ever looks at the module. `config/droidspaces.layer` sets `MODULE_SIG_FORCE=n` — the
+ROM's own kernel does not enforce signatures either — and `scripts/build.sh` fails the
+build if the option comes back. Modules loaded this way taint the kernel with
+`module verification failed`; nothing else changes.
+
+## WiFi: the AID capability mapping
+
+Turning off `ANDROID_PARANOID_NETWORK` so container uids can call `socket()` has a
+second effect that the Kconfig help does not mention: the same `#ifdef` guards the
+AID → capability mapping in `security/commoncap.c`.
+
+```c
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+	if (cap == CAP_NET_RAW && in_egroup_p(AID_NET_RAW))
+		return 0;
+	if (cap == CAP_NET_ADMIN && in_egroup_p(AID_NET_ADMIN))
+		return 0;
+#endif
+```
+
+Android's networking daemons are started with group membership, not with
+`capabilities` — the ROM's own `wificond.rc` is exactly:
+
+```
+service wificond /system/bin/wificond
+    class main
+    user wifi
+    group wifi net_raw net_admin
+```
+
+With the mapping compiled out, `wificond` has no CAP_NET_ADMIN, `SO_RCVBUFFORCE`
+returns `EPERM`, and the process aborts while starting its netlink manager — a restart
+loop that leaves the phone without WiFi even though the driver module loaded:
+
+```
+E wificond: Failed to set uevent socket SO_RCVBUFFORCE option: Operation not permitted
+E wificond: Failed to setup synchronous netlink socket
+F wificond: main.cpp:130] Check failed: netlink_manager.Start() Failed to start netlink manager
+```
+
+`patches/03-restore-aid-capabilities.patch` compiles the mapping unconditionally, so
+containers keep the permissive `socket()` **and** the phone keeps its daemons. Measured
+with `fastboot boot` (RAM only):
+
+| Kernel | `wificond` | `wlan0` | WiFi |
+|---|---|---|---|
+| ROM's own global `boot.img` | `running` | UP | associates, 5 GHz, 130 Mbps |
+| `ANDROID_PARANOID_NETWORK=n`, no patch 03 | `restarting` (SIGABRT) | created, then removed | dead |
+| this kernel | `running` | UP | associates |
+
+The same mapping serves `wpa_supplicant`, `hostapd`, `lowi`, `cnss-daemon` and non-root
+`ping`, so without it the failure is not limited to WiFi.
 
 ## Vendor module compatibility (the CRC question)
 
@@ -256,6 +305,7 @@ bootimg/mi5_boot.img             stock CN boot image used as repack template
 bootimg/mi5_boot_g.img           stock global boot image used as repack template
 patches/01-fix-xt-qtaguid-panic.patch    non-GKI crash fix, stock behaviour kept
 patches/02-allow-crc-mismatch.patch      warn instead of refusing vendor modules
+patches/03-restore-aid-capabilities.patch  keep the AID → capability mapping
 scripts/fetch-toolchain.sh       fetch the gcc 4.9 prebuilt into .work/
 scripts/build.sh, qemu_probe.sh  build + VM smoke test
 tools/                           defconfig generator, config/CRC/boot checkers,

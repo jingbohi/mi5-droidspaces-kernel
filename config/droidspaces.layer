@@ -79,6 +79,13 @@ NFT_MASQ=y
 # --- Android specific -----------------------------------------------------
 # Stock sets this (default ANDROID) and it only lets group AID_INET open
 # sockets; container services run as plain uids and would get EACCES.
+# NOTE: the same #ifdef in security/commoncap.c also guards the Android
+# "group AID_NET_RAW/AID_NET_ADMIN == capability" mapping that wificond,
+# wpa_supplicant, hostapd, lowi and cnss-daemon rely on -- their .rc files
+# grant groups, not capabilities.  Turning the option off removes that
+# mapping and the phone boots without WiFi (wificond aborts on
+# SO_RCVBUFFORCE/EPERM).  patches/03-restore-aid-capabilities.patch compiles
+# the mapping unconditionally, so keep both in sync.
 ANDROID_PARANOID_NETWORK=n
 
 # --- vendor modules -------------------------------------------------------
@@ -87,7 +94,8 @@ ANDROID_PARANOID_NETWORK=n
 # stock Image carries the matching public key, so a rebuilt kernel rejects every
 # factory module with "Required key not available" (ENOKEY): no WiFi
 # (qca_cld_wlan.ko), no exFAT, no wil6210.  Measured on hardware -- the stock
-# global boot.img loads exfat.ko and qca_cld_wlan.ko, v1.0.1 did not load either.
+# global boot.img loads exfat.ko and qca_cld_wlan.ko, a kernel with the stock
+# value loads neither.
 # The ROM's own kernel evidently does not enforce, so neither do we: the modules
 # load and the kernel is tainted with "module verification failed".
 MODULE_SIG_FORCE=n

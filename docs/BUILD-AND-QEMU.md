@@ -24,12 +24,12 @@ The compiler is not interchangeable — section 1a has the hardware evidence.
 
 ## 1a. Toolchain: why gcc 4.9 (hardware evidence)
 
-The first release (`v1.0.0`, built with Ubuntu's `aarch64-linux-gnu-gcc` 9.4)
-never booted: the phone showed the MI logo, hung, and the bootloader reset it
-after ~10 s. `CONFIG_PANIC_TIMEOUT=1` turns a panic into a 1 s reset, so a ~10 s
-reset means a hang, not a panic — and because the hang is before
-`console_init()`, `ramoops`/`pstore`/`/proc/last_kmsg` can never contain it. No
-on-device log is obtainable; the cause had to come from bisecting on hardware.
+An early build (Ubuntu's `aarch64-linux-gnu-gcc` 9.4) never booted: the phone showed
+the MI logo, hung, and the bootloader reset it after ~10 s. `CONFIG_PANIC_TIMEOUT=1`
+turns a panic into a 1 s reset, so a ~10 s reset means a hang, not a panic — and
+because the hang is before `console_init()`, `ramoops`/`pstore`/`/proc/last_kmsg` can
+never contain it. No on-device log is obtainable; the cause had to come from bisecting
+on hardware.
 
 `fastboot boot` loads an image into RAM without writing flash (the same path TWRP
 uses), so each test was non-destructive and the phone fell back to its own kernel
@@ -52,7 +52,7 @@ Interpretation:
 - **C** proves image size / load placement is irrelevant (it has the same
   `image_size` shape as the failing build).
 - **B** is pure stock source with the stock defconfig and no patches, so the
-  Droidspaces config layer, `patches/01` and `patches/02` are all ruled out.
+  Droidspaces config layer and all three patches are ruled out.
 - **B2** removes `CONFIG_QCOM_EARLY_RANDOM` (the one early code path QEMU never
   runs, because QEMU has no EL3), so early randomness is ruled out too.
 - **D** changes nothing but the compiler and boots.
@@ -100,13 +100,14 @@ CONFIG_LOCALVERSION_AUTO=n
 == vermagic OK: 3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64
 ```
 
-Two patches are applied (both verified with `patch -p1 --dry-run` against this
+Three patches are applied (all verified with `patch -p1 --dry-run` against this
 exact commit):
 
 | Patch | Why |
 |---|---|
 | `01-fix-xt-qtaguid-panic.patch` | stock `dev_get_stats()` on a socket-less device panics; skip stats for devices outside `init_net`, keep stock per-interface statistics untouched |
 | `02-allow-crc-mismatch.patch` | keep stock vendor modules loading although genksyms renumbered two thirds of the export table (see §5) |
+| `03-restore-aid-capabilities.patch` | keep the Android AID → capability mapping that `ANDROID_PARANOID_NETWORK=n` also removes; without it `wificond` aborts and there is no WiFi (see §5b) |
 
 ## 3. Stock baseline: the tree really is the ROM's kernel
 
@@ -294,8 +295,8 @@ Measured with `fastboot boot` (RAM only) plus `/sys/module` and `logcat`:
 | Kernel | `/sys/module` after boot | after switching WiFi on |
 |---|---|---|
 | ROM's own global `boot.img` (OAAMIXM) | `exfat` | `wlan`, HAL stays up |
-| v1.0.1, `MODULE_SIG_FORCE=y` | no external module | `Failed to load WiFi driver`, no `wlan` |
-| v1.0.2, `MODULE_SIG_FORCE=n` | `exfat` | `wlan`, HAL stays up |
+| stock value, `MODULE_SIG_FORCE=y` | no external module | `Failed to load WiFi driver`, no `wlan` |
+| `MODULE_SIG_FORCE=n` (this kernel) | `exfat`, `cfg80211`, `wlan` | HAL stays up |
 
 `/sys/module` is the cheap check: `exfat.ko` is insmod'ed by `init.qcom.rc` on every boot,
 so if it is missing, module loading is broken before WiFi is even involved.
@@ -305,9 +306,59 @@ enforce signatures either — and `scripts/build.sh` aborts if the resolved `.co
 `CONFIG_MODULE_SIG_FORCE=y` again. Modules loaded this way taint the kernel
 (`module verification failed`); the CRC warnings described in §5 follow.
 
+## 5b. WiFi: the AID capability mapping (hardware evidence)
+
+With the modules loading, WiFi still did not work: `wificond` was in a `SIGABRT` restart
+loop, and the abort message named the call:
+
+```
+E wificond: Failed to set uevent socket SO_RCVBUFFORCE option: Operation not permitted
+E wificond: Failed to setup synchronous netlink socket
+F wificond: main.cpp:130] Check failed: netlink_manager.Start() Failed to start netlink manager
+```
+
+`SO_RCVBUFFORCE` needs CAP_NET_ADMIN, and `wificond` never asks for that capability —
+the ROM starts it with group membership only:
+
+```
+service wificond /system/bin/wificond
+    class main
+    user wifi
+    group wifi net_raw net_admin
+```
+
+The kernel turns those groups into capabilities in `security/commoncap.c`, and that code
+is compiled only under `CONFIG_ANDROID_PARANOID_NETWORK`:
+
+```c
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+	if (cap == CAP_NET_RAW && in_egroup_p(AID_NET_RAW))
+		return 0;
+	if (cap == CAP_NET_ADMIN && in_egroup_p(AID_NET_ADMIN))
+		return 0;
+#endif
+```
+
+`ANDROID_PARANOID_NETWORK=n` is in the layer so that non-root uids inside a container can
+create sockets (§4). It also compiled out the mapping, so every Android daemon that gets
+its privileges from `group ... net_raw net_admin` lost them: `wificond`,
+`wpa_supplicant`, `hostapd`, `lowi`, `cnss-daemon`, and non-root `ping`.
+
+`patches/03-restore-aid-capabilities.patch` moves the mapping out of the `#ifdef`, so
+both behaviours coexist. Measured on hardware (`fastboot boot`, RAM only):
+
+| Kernel | `wificond` | `wlan0` | WiFi |
+|---|---|---|---|
+| ROM's own global `boot.img` | `running` | UP, `74:23:44:98:f8:4f` | associates, 5 GHz, -68 dBm, 130 Mbps |
+| `ANDROID_PARANOID_NETWORK=n`, no patch 03 | `restarting` (SIGABRT) | created then removed | dead |
+| this kernel | `running` | UP | associates |
+
+`scripts/build.sh` refuses to build if `security/commoncap.c` still guards the mapping,
+so the two halves cannot drift apart.
+
 ## 6. Release image
 
-Numbers below are from the v1.0.1 build; v1.0.2 changes the config, so its sizes and
+Numbers below are from a local build of the same tree; the released files' sizes and
 sha256 are the ones in the release's `SHA256SUMS.txt` and `verify-boot*.txt`.
 
 ```

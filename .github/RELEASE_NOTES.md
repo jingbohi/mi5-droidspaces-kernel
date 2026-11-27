@@ -12,6 +12,8 @@ layout: only the gzip'ed `Image` is replaced — the 20 DTBs, the stock ramdisk 
 | vermagic | `3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64` |
 | config changes vs stock | 27 options |
 | boot image structure check | 26 / 26 PASS on both images |
+| vendor modules | the ROM's own `.ko` files load: `exfat`, `cfg80211`, `wlan` |
+| WiFi | `wificond` up, `wlan0` UP, associates (5 GHz, 130 Mbps) |
 | QEMU boot | reaches userspace, 6 / 6 markers PASS |
 
 ## Which image to flash
@@ -34,42 +36,80 @@ compiler, both `Image` files 33,644,544 B), but their ramdisks differ in `defaul
 into the wrong template usually still boots, but it then runs the other ROM's SELinux
 policy.
 
-## v1.0.2 — vendor modules load again
+## Stock vendor modules: two loader checks have to be relaxed
 
-v1.0.1 booted, but it could not load a single factory module. MIUI's defconfig enforces
-module signatures (`CONFIG_MODULE_SIG_FORCE=y`) and every `.ko` of a MIUI build is signed
-with the key generated for that particular build. Only the stock `Image` carries the
-matching public key, so a rebuilt kernel rejects all of them:
+The ROM's `.ko` files are prebuilt against Xiaomi's own `Image`, and a rebuilt kernel
+fails both of the loader's checks. Each one was isolated on hardware with `fastboot boot`
+(loads into RAM, writes nothing):
+
+### 1. Module signatures — `MODULE_SIG_FORCE=n`
+
+MIUI's defconfig enforces signatures and every `.ko` of a MIUI build is signed with the
+key generated for that build. Only the stock `Image` carries the matching public key, so
+a rebuilt kernel rejects all of them:
 
 ```
 android.hardware.wifi@1.0-service: finit_module return: -1: Required key not available
 android.hardware.wifi@1.0-service: Failed to load WiFi driver
 ```
 
-That means no WiFi (`qca_cld_wlan.ko`), no exFAT and no `wil6210`. Measured on hardware
-with `fastboot boot` (RAM only): the ROM's own global `boot.img` loads `exfat.ko` at boot
-and `qca_cld_wlan.ko` as soon as WiFi is switched on; v1.0.1 loaded neither, and
-`/sys/module` stayed empty of every external module.
+That silently removes WiFi (`qca_cld_wlan.ko`), exFAT and `wil6210`. Measured:
+the ROM's own global `boot.img` loads `exfat.ko` at boot and `qca_cld_wlan.ko` when WiFi
+is switched on; a kernel with the stock value loads no external module at all and
+`/sys/module` stays empty of them.
 
-`CONFIG_MODULE_SIG_FORCE=n` now — the ROM's own kernel does not enforce signatures either.
-The modules load and the kernel is tainted with `module verification failed`, which is
-expected and harmless. `scripts/build.sh` fails the build if the option ever comes back.
+`CONFIG_MODULE_SIG_FORCE=n` now — the ROM's own kernel does not enforce signatures
+either. The modules load and the kernel is tainted with `module verification failed`,
+which is expected and harmless. `scripts/build.sh` fails the build if the option comes
+back.
 
-v1.0.2 also adds the global boot image: same `Image`, packed into the global ROM's own
-`boot.img` template (byte-identical to `images/boot.img` of the global ROM package).
+### 2. WiFi — the AID → capability mapping
 
-## v1.0.1 — the compiler, not the config
+With the modules loading, WiFi was still dead: `wificond` was in a `SIGABRT` restart loop.
 
-v1.0.0 was compiled with Ubuntu 20.04's `aarch64-linux-gnu-gcc` 9.4. On the phone
-that `Image` hung at the MI logo and the bootloader reset it after ~10 s, before
-`console_init()`, so `pstore` / `last_kmsg` stayed empty and no log was possible.
+```
+E wificond: Failed to set uevent socket SO_RCVBUFFORCE option: Operation not permitted
+E wificond: Failed to setup synchronous netlink socket
+F wificond: main.cpp:130] Check failed: netlink_manager.Start() Failed to start netlink manager
+```
 
-Bisecting on hardware with `fastboot boot` (loads into RAM, writes nothing)
-isolated the compiler: the same tree, stock defconfig, patches and packer built
-with gcc 9.4 fails; Xiaomi's own `Image` repacked by our packer boots; the full
-release built with the AOSP `aarch64-linux-android-4.9` prebuilt — the compiler
-the ROM's own `Image` reports — boots on the real device. Full evidence table in
-`docs/BUILD-AND-QEMU.md` §1a.
+`SO_RCVBUFFORCE` needs CAP_NET_ADMIN, and the ROM starts `wificond` with group membership
+instead of capabilities (`user wifi`, `group wifi net_raw net_admin`). The kernel turns
+those groups into capabilities in `security/commoncap.c`, and that code is compiled only
+under `CONFIG_ANDROID_PARANOID_NETWORK`:
+
+```c
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+	if (cap == CAP_NET_RAW && in_egroup_p(AID_NET_RAW))
+		return 0;
+	if (cap == CAP_NET_ADMIN && in_egroup_p(AID_NET_ADMIN))
+		return 0;
+#endif
+```
+
+The layer turns `ANDROID_PARANOID_NETWORK` off so non-root uids can `socket()` inside a
+container, which compiled the mapping out and took CAP_NET_RAW/CAP_NET_ADMIN away from
+`wificond`, `wpa_supplicant`, `hostapd`, `lowi`, `cnss-daemon` and non-root `ping`.
+
+`patches/03-restore-aid-capabilities.patch` compiles the mapping unconditionally, so
+containers keep the permissive `socket()` and the phone keeps its daemons. Measured:
+
+| Kernel | `wificond` | `wlan0` | WiFi |
+|---|---|---|---|
+| ROM's own global `boot.img` | `running` | UP | associates, 5 GHz, 130 Mbps |
+| `PARANOID_NETWORK=n`, no patch 03 | `restarting` (SIGABRT) | created then removed | dead |
+| this kernel | `running` | UP | associates |
+
+`scripts/build.sh` aborts if `security/commoncap.c` still guards the mapping, so the two
+cannot drift apart.
+
+### CRC warnings are expected
+
+Adding the IPC namespace grows `struct task_struct`, which renumbers two thirds of the
+export table (6,328 of 9,378) without changing any struct a driver embeds.
+`patches/02-allow-crc-mismatch.patch` warns instead of refusing; missing symbols stay
+fatal, and the build fails if a critical module loses an import. `dmesg` therefore shows
+a few `disagrees about version of symbol` warnings while the modules load.
 
 ## What is added
 
@@ -81,28 +121,20 @@ the ROM's own `Image` reports — boots on the real device. Full evidence table 
 - **Filesystems** — `DEVTMPFS`, `OVERLAY_FS`.
 - **Network** — `MACVLAN`, `NF_TABLES` / `NFT_NAT` / `NFT_MASQ`, IPv6 NAT
   (`IP6_NF_NAT`, `NF_NAT_IPV6`), `XT_TARGET_TCPMSS`, `XT_MATCH_ADDRTYPE`.
-- **Android** — `ANDROID_PARANOID_NETWORK=n`; with the stock value non-root uids cannot
-  even call `socket()` inside a container.
-- **Vendor modules** — `MODULE_SIG_FORCE=n`, see above.
+- **Android** — `ANDROID_PARANOID_NETWORK=n` for container uids, plus patch 03 so the
+  AID capability mapping survives (see above).
+- **Vendor modules** — `MODULE_SIG_FORCE=n` (see above).
 
 Every other option — every MSM8996 driver, WiFi, modem, camera, audio, touch, charging,
 thermal and debug option — keeps its stock value.
 
-## Stock vendor modules
+## Toolchain
 
-`qca_cld_wlan.ko`, `wil6210.ko`, `exfat.ko`, `br_netfilter.ko` and the rest of the ROM's
-modules keep **all** of their imported symbols. Two loader checks have to be relaxed for
-that, both documented in `docs/BUILD-AND-QEMU.md`:
-
-- **signatures** — the modules are signed with Xiaomi's build key, which a rebuilt kernel
-  does not have, so enforcement is off (`MODULE_SIG_FORCE=n`).
-- **CRC** — adding the IPC namespace grows `struct task_struct`, which renumbers two
-  thirds of the export table (6,328 of 9,378) without changing any struct a driver
-  embeds. `patches/02-allow-crc-mismatch.patch` warns instead of refusing; missing
-  symbols stay fatal, and the build fails if a critical module loses an import.
-
-`dmesg` therefore shows a few `disagrees about version of symbol` warnings while the
-modules load.
+The ROM's `Image` reports `gcc version 4.9.x 20150123`, and this kernel has to be built
+with that generation: an `Image` built from the same tree, config, patches and packer
+with gcc 9.4 hangs at the MI logo before `console_init()`, so there is no log to read.
+The release is built with the AOSP `aarch64-linux-android-4.9` prebuilt, and the
+`Image` size lands within 4 KB of Xiaomi's own.
 
 ## Flash
 

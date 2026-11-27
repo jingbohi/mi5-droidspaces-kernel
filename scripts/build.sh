@@ -106,6 +106,19 @@ else
     touch "$SRC/.patched"
 fi
 
+# ANDROID_PARANOID_NETWORK=n is needed for container uids, but the same #ifdef
+# guards the AID -> capability mapping Android's daemons rely on; patch 03
+# compiles it unconditionally.  Fail loudly if a tree ever loses that patch.
+if grep -q '^#ifdef CONFIG_ANDROID_PARANOID_NETWORK' "$SRC/security/commoncap.c"; then
+    echo "!! security/commoncap.c still guards the AID capability mapping" >&2
+    echo "!! (patches/03-restore-aid-capabilities.patch missing or not applied)" >&2
+    exit 1
+fi
+if ! grep -q 'in_egroup_p(AID_NET_ADMIN)' "$SRC/security/commoncap.c"; then
+    echo "!! security/commoncap.c lost the AID_NET_ADMIN capability mapping" >&2
+    exit 1
+fi
+
 case "$VARIANT" in
     release) DEFCONFIG=mi5_droidspaces_defconfig; EXTRA="" ;;
     probe)   DEFCONFIG=mi5_probe_defconfig; EXTRA="--extra config/probe.layer" ;;

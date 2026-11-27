@@ -1,0 +1,62 @@
+From: mi5-droidspaces-kernel <noreply@example.invalid>
+Subject: [PATCH] commoncap: keep the Android AID -> capability mapping
+
+Android does not use file capabilities for most of its networking daemons.
+wificond, wpa_supplicant, hostapd, lowi and cnss-daemon are started with
+"group ... net_raw net_admin" and no "capabilities" line, and rely on
+cap_capable() turning membership of AID_NET_RAW (3004) / AID_NET_ADMIN (3005)
+into the matching capability.
+
+That mapping is compiled in only under CONFIG_ANDROID_PARANOID_NETWORK, which
+this kernel turns off so that non-root uids inside a container can create
+sockets (net/ipv4/af_inet.c: current_has_network() returns 1).  Turning it off
+also removed the mapping, and with it every capability those daemons need:
+
+  wificond: Failed to set uevent socket SO_RCVBUFFORCE option: Operation not permitted
+  wificond: Failed to setup synchronous netlink socket
+  wificond: main.cpp:130] Check failed: netlink_manager.Start()
+  wificond: Fatal signal 6 (SIGABRT)
+
+so the phone booted without WiFi at all (measured on hardware, v1.0.2).
+
+The two checks are independent: keep the container-friendly socket behaviour
+and keep the AID mapping, by compiling the mapping unconditionally.
+
+Signed-off-by: mi5-droidspaces-kernel <noreply@example.invalid>
+---
+ security/commoncap.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+--- a/security/commoncap.c
++++ b/security/commoncap.c
+@@ -31,9 +31,7 @@
+ #include <linux/binfmts.h>
+ #include <linux/personality.h>
+ 
+-#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+ #include <linux/android_aid.h>
+-#endif
+ 
+ /*
+  * If a non-root user executes a setuid-root binary in
+@@ -82,12 +80,18 @@
+ {
+ 	struct user_namespace *ns = targ_ns;
+ 
+-#ifdef CONFIG_ANDROID_PARANOID_NETWORK
++	/*
++	 * Android userspace hands out CAP_NET_RAW and CAP_NET_ADMIN through
++	 * group membership: init .rc files say "group ... net_raw net_admin"
++	 * instead of "capabilities NET_RAW NET_ADMIN", and this is the code
++	 * that turns the group into the capability.  wificond, wpa_supplicant,
++	 * hostapd, lowi and cnss-daemon all depend on it, so it must not
++	 * disappear when CONFIG_ANDROID_PARANOID_NETWORK is off.
++	 */
+ 	if (cap == CAP_NET_RAW && in_egroup_p(AID_NET_RAW))
+ 		return 0;
+ 	if (cap == CAP_NET_ADMIN && in_egroup_p(AID_NET_ADMIN))
+ 		return 0;
+-#endif
+ 
+ 	/* See if cred has the capability in the target user namespace
+ 	 * by examining the target user namespace and all of the target
