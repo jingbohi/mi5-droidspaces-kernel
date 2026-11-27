@@ -209,8 +209,10 @@ config/stock-resolved.config     stock `make olddefconfig` result (diff base)
 bootimg/mi5_boot.img             stock boot image used as repack template
 patches/01-fix-xt-qtaguid-panic.patch    non-GKI crash fix, stock behaviour kept
 patches/02-allow-crc-mismatch.patch      warn instead of refusing vendor modules
+scripts/fetch-toolchain.sh       fetch the gcc 4.9 prebuilt into .work/
 scripts/build.sh, qemu_probe.sh  build + VM smoke test
 tools/                           defconfig generator, config/CRC/boot checkers,
+                                 gzip stream and byte-level boot image audits,
                                  boot image extractor, probe_init.c (initramfs
                                  init for the QEMU probe)
 .github/workflows/build.yml      CI: both variants, QEMU test, release on v* tags

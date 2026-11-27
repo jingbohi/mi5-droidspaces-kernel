@@ -318,6 +318,21 @@ Linux version 3.18.71-perf-g4a0ef96 (mi5@droidspaces) (gcc version 4.9.x 2015012
 vermagic     : 3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64
 ```
 
+Two further checks work on the boot image itself rather than the `Image`:
+
+- `tools/boot_image_audit.py stock.img ours.img` compares both files field by
+  field — header, `id` digest, gzip header flags, the gzip trailer and the
+  concatenated DTB chain — and prints `MATCH` / `ok` per item.
+- `tools/check_gzip_stream.py ours.img` inflates the stream on its own and
+  compares the trailer CRC32/ISIZE with the real values, independent of the
+  boot image parser.
+
+Both are byte-level checks, so they are also what caught a bug in the audit
+tool itself: it unpacked the gzip trailer as `(ISIZE, CRC32)` while the format
+is CRC32 first, and therefore reported `BAD` for every image, the stock one
+included. The kernel's decompressor never looks at those two fields (the
+`Image` size is what matters), which is why the images booted anyway.
+
 ## 7. QEMU probe
 
 `scripts/build.sh probe` builds the same tree with `config/probe.layer` and
