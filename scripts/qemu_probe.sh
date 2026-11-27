@@ -16,11 +16,18 @@ IMAGE=${1:?usage: qemu_probe.sh <Image> [logfile]}
 LOG=${2:-qemu-serial.log}
 TIMEOUT=${TIMEOUT:-180}
 MEM=${MEM:-2048}
-CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
+# The kernel itself is built with the Android gcc 4.9 prebuilt, but the tiny
+# initramfs below is a glibc static binary, so it keeps using the distro cross
+# compiler.  Override with INIT_CC if needed.
+INIT_CC=${INIT_CC:-aarch64-linux-gnu-gcc}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 command -v qemu-system-aarch64 >/dev/null || {
     echo "!! qemu-system-aarch64 not installed" >&2
+    exit 1
+}
+command -v "$INIT_CC" >/dev/null || {
+    echo "!! $INIT_CC not installed (needed for the probe initramfs)" >&2
     exit 1
 }
 
@@ -28,7 +35,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 echo "== building probe initramfs"
-"${CROSS_COMPILE}gcc" -static -nostdlib -ffreestanding -O2 \
+"$INIT_CC" -static -nostdlib -ffreestanding -O2 \
     -Wl,-e,_start -o "$WORK/init" "$ROOT/tools/probe_init.c"
 mkdir -p "$WORK/root/dev"
 cp "$WORK/init" "$WORK/root/init"

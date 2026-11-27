@@ -11,8 +11,8 @@ driver keeps working.
 | ROM base | `mi5_gemini_images_V10.2.1.0.OAACNXM_20181224.0000.00_8.0_cn` |
 | Source | `MiCode/Xiaomi_Kernel_OpenSource` branch `scorpio-o-oss`, `3.18.71`, commit `a36928c` |
 | Target vermagic | `3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64` |
-| Toolchain | `aarch64-linux-gnu-gcc` 9.4 (Ubuntu 20.04) |
-| Release | [v1.0.0](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.0) — `boot-mi5-droidspaces.img` plus every verification report |
+| Toolchain | AOSP `aarch64-linux-android-4.9` prebuilt (`gcc 4.9.x 20150123`), fetched by `scripts/fetch-toolchain.sh` |
+| Release | [v1.0.1](https://github.com/jingbohi/mi5-droidspaces-kernel/releases/tag/v1.0.1) — `boot-mi5-droidspaces.img` plus every verification report |
 
 The ROM's own kernel commit `g4a0ef96` is not in the public tree, so the version
 string is pinned with `CONFIG_LOCALVERSION="-perf-g4a0ef96"` +
@@ -29,8 +29,8 @@ these scripts produce locally, and its artifacts were re-checked with
 
 | Check | Result |
 |---|---|
-| `Image` | 35,735,040 B |
-| boot image | 25,326,922 B (sha256 in `SHA256SUMS.txt`) |
+| `Image` | 33,648,640 B |
+| boot image | 24,700,234 B (sha256 in `SHA256SUMS.txt`) |
 | boot image structure | 26 / 26 checks PASS — DTBs, ramdisk, certificate, cmdline and addresses byte-identical to stock |
 | config diff vs stock | 26 options (full list in `config-diff-release.txt`) |
 | kernel exports | 9,410 symbols |
@@ -40,6 +40,36 @@ these scripts produce locally, and its artifacts were re-checked with
 The QEMU test boots the same tree with a PL011 console; it cannot exercise
 MSM8996 hardware, but it does run the decompressor, page tables, SMP bring-up,
 every initcall and a userspace process. Details: [docs/BUILD-AND-QEMU.md](docs/BUILD-AND-QEMU.md).
+
+## Toolchain: why gcc 4.9
+
+The ROM's own `Image` reports `gcc version 4.9.x 20150123 (prerelease)`, and this
+kernel has to be built with that generation of compiler. An `Image` built from the
+same tree, config, patches and packer with Ubuntu 20.04's `aarch64-linux-gnu-gcc`
+9.4 **hangs on the real phone**: the MI logo stays up and the bootloader resets
+after ~10 s. It never reaches `console_init()`, so `ramoops`/`pstore`/`last_kmsg`
+stay empty and there is no log to read — the failure is only observable on
+hardware.
+
+Established with `fastboot boot` (loads into RAM, writes nothing) using images
+that differ in exactly one variable each:
+
+| Image | Content | Result |
+|---|---|---|
+| A | Xiaomi's own `Image`, repacked by our packer | boots |
+| C | Xiaomi's own `Image`, padded to the release image size | boots |
+| B | our rebuild of the stock defconfig with gcc 9.4 | hangs, resets |
+| D | the full release config with gcc 4.9 | boots |
+
+A and C rule out the packer, the DTBs, the certificate and the image size; B
+rules out the Droidspaces config layer and both patches (it is pure stock source
+with the stock defconfig); D is the release itself. The two compilers also differ
+in the same direction as the failure: gcc 9.4 produces a 35,735,040 B `Image`,
+gcc 4.9 produces 33,648,640 B against the ROM's 33,644,544 B.
+
+`scripts/fetch-toolchain.sh` downloads the prebuilt (direct → local proxy →
+GitHub proxy) into `.work/aarch64-linux-android-4.9`; `scripts/build.sh` refuses
+to start without it unless `CROSS_COMPILE` is set explicitly.
 
 ## Why this works on a stock ROM
 
@@ -130,11 +160,12 @@ longer supports SysV IPC / POSIX mqueues inside containers.
 
 ## Build
 
-Locally (Linux or WSL, needs `gcc-aarch64-linux-gnu`, `bc`, `bison`, `flex`,
-`libssl-dev`, `libelf-dev`, `python3`, and for the probe `qemu-system-arm` +
-`cpio`):
+Locally (Linux or WSL, needs `bc`, `bison`, `flex`, `libssl-dev`, `libelf-dev`,
+`python3`, `git` + `python-is-python3` for the prebuilt compiler wrapper, and for
+the probe `gcc-aarch64-linux-gnu` + `qemu-system-arm` + `cpio`):
 
 ```bash
+scripts/fetch-toolchain.sh      # AOSP gcc 4.9 prebuilt -> .work/
 scripts/build.sh release        # out-release/  dist/boot-mi5-droidspaces.img
 scripts/build.sh probe          # out-probe/    dist/Image-probe (PL011 for QEMU)
 scripts/qemu_probe.sh dist/Image-probe qemu-serial.log

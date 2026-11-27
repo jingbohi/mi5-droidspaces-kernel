@@ -8,6 +8,8 @@
 #   SRC=.work/kernel     kernel source tree (downloaded when missing)
 #   JOBS=$(nproc)        parallel make jobs
 #   DIST=dist            where boot.img / Image / reports are collected
+#   TOOLCHAIN=...        gcc 4.9 prebuilt (see scripts/fetch-toolchain.sh)
+#   CROSS_COMPILE=...    overrides the compiler prefix entirely
 #   USE_CCACHE=1         wrap the cross compiler with ccache when available
 #   SKIP_DOWNLOAD=1      fail instead of downloading the source
 #
@@ -29,7 +31,21 @@ KERNEL_TARBALL="$ROOT/.work/kernel.tar.gz"
 KERNEL_URL=${KERNEL_URL:-"https://codeload.github.com/$KERNEL_REPO/tar.gz/$KERNEL_COMMIT"}
 
 export ARCH=arm64
-export CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
+# Build with the compiler generation Xiaomi used.  The stock Image reports
+# "gcc version 4.9.x 20150123 (prerelease)"; an Image built with the distro
+# compiler (gcc 9.4 on Ubuntu 20.04) hangs on the phone before console_init()
+# and reboots after ~10 s, with no way to capture a log.  Everything else about
+# the build is identical, so the toolchain is not a preference here.
+TOOLCHAIN=${TOOLCHAIN:-"$ROOT/.work/aarch64-linux-android-4.9"}
+if [ -z "${CROSS_COMPILE:-}" ]; then
+    CROSS_COMPILE="$TOOLCHAIN/bin/aarch64-linux-android-"
+fi
+export CROSS_COMPILE
+if [ ! -x "${CROSS_COMPILE}gcc" ]; then
+    echo "!! cross compiler not found: ${CROSS_COMPILE}gcc" >&2
+    echo "   run scripts/fetch-toolchain.sh first, or set CROSS_COMPILE" >&2
+    exit 1
+fi
 export KBUILD_BUILD_USER=${KBUILD_BUILD_USER:-mi5}
 export KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST:-droidspaces}
 
@@ -76,6 +92,7 @@ if [ ! -f "$SRC/Makefile" ]; then
 fi
 
 echo "== kernel tree: $(sed -n 's/^\(VERSION\|PATCHLEVEL\|SUBLEVEL\) = \(.*\)/\1=\2/p' "$SRC/Makefile" | tr '\n' ' ')"
+echo "== compiler   : $("${CROSS_COMPILE}gcc" --version | head -1)"
 SRC=$(cd "$SRC" && pwd)
 
 if [ -f "$SRC/.patched" ]; then

@@ -9,14 +9,74 @@ run can be compared line by line.
 | | |
 |---|---|
 | Host | WSL2 Ubuntu 20.04 (Windows 10) |
-| Compiler | `aarch64-linux-gnu-gcc` (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0 |
+| Compiler | AOSP `aarch64-linux-android-4.9` prebuilt, `gcc 4.9.x 20150123 (prerelease)` — the version the ROM's `Image` reports |
+| Probe initramfs | `aarch64-linux-gnu-gcc` 9.4 (glibc static binary, unrelated to the kernel) |
 | Kernel build host/user | `mi5@droidspaces` (fixed, so the banner is reproducible) |
 | QEMU | `qemu-system-aarch64` 4.2.1 (`-M virt`) |
 | Python | 3.8 (`tools/` are plain stdlib) |
 
 `scripts/gcc-wrapper.py` from Xiaomi turns every warning into an error and needs
-`python2`, so the build calls the cross compiler directly (`CC=aarch64-linux-gnu-gcc`).
-All warnings stay in `build.log`.
+`python2`, so the build calls the cross compiler directly
+(`CC=.work/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc`). All warnings
+stay in `build.log`.
+
+The compiler is not interchangeable — section 1a has the hardware evidence.
+
+## 1a. Toolchain: why gcc 4.9 (hardware evidence)
+
+The first release (`v1.0.0`, built with Ubuntu's `aarch64-linux-gnu-gcc` 9.4)
+never booted: the phone showed the MI logo, hung, and the bootloader reset it
+after ~10 s. `CONFIG_PANIC_TIMEOUT=1` turns a panic into a 1 s reset, so a ~10 s
+reset means a hang, not a panic — and because the hang is before
+`console_init()`, `ramoops`/`pstore`/`/proc/last_kmsg` can never contain it. No
+on-device log is obtainable; the cause had to come from bisecting on hardware.
+
+`fastboot boot` loads an image into RAM without writing flash (the same path TWRP
+uses), so each test was non-destructive and the phone fell back to its own kernel
+on failure. Every image was repacked from the same stock template with the same
+packer, and the version banner was marked so `/proc/version` identifies which
+kernel actually started.
+
+| Image | Content | `/proc/version` marker | Result |
+|---|---|---|---|
+| A | Xiaomi's own `Image` + our packer | `CST 2019` | boots |
+| C | Xiaomi's own `Image`, padded to the release size | `CST 2020` | boots |
+| B | our rebuild of `gemini_user_defconfig`, gcc 9.4, no patches | `gcc version 9.4` | hangs → resets |
+| B2 | B with `init_random_pool()` patched to `ret` | `gcc version 9.4` | hangs → resets |
+| D | full release config + patches, gcc 4.9 | `mi5@droidspaces` | boots |
+
+Interpretation:
+
+- **A** proves the packer, gzip stream, header `id`, 20-DTB tail and 1,354-byte
+  certificate trailer are correct.
+- **C** proves image size / load placement is irrelevant (it has the same
+  `image_size` shape as the failing build).
+- **B** is pure stock source with the stock defconfig and no patches, so the
+  Droidspaces config layer, `patches/01` and `patches/02` are all ruled out.
+- **B2** removes `CONFIG_QCOM_EARLY_RANDOM` (the one early code path QEMU never
+  runs, because QEMU has no EL3), so early randomness is ruled out too.
+- **D** changes nothing but the compiler and boots.
+
+The arm64 `Image` header was also compared byte by byte (stock vs gcc 9.4 vs
+gcc 4.9): `text_offset=0x80000`, `image_size`, `flags=0`, `magic=ARM\x64` and the
+`code0/code1` branch pair are identical in all three, so the bootloader sees the
+same entry point. The remaining difference is code generation, and its scale is
+visible in the image size:
+
+| Build | `Image` |
+|---|---|
+| ROM | 33,644,544 B |
+| gcc 9.4, stock defconfig | 35,729,920 B |
+| gcc 9.4, release config | 35,735,040 B |
+| gcc 4.9, release config | 33,648,640 B |
+
+A ~2 MB difference on an identical tree and config is not noise. The exact
+miscompiled path was not identified further: with gcc 4.9 the release boots and
+every stock module keeps its imports, which is the property that matters.
+
+`scripts/fetch-toolchain.sh` reproduces the toolchain (LineageOS mirror of the
+AOSP prebuilt; the wrapper is Python and needs a `python` in `PATH`), and
+`scripts/build.sh` defaults `CROSS_COMPILE` to it.
 
 ## 2. Source and patches
 
@@ -219,11 +279,13 @@ imports and loads with a warning in `dmesg` instead of being rejected.
 
 ```
 == building Image (4 jobs)
-new Image     : 35,735,040 B  md5 6dfc8bb6c8d0daf8a9da58bd4374e436
-new kernel    : 22,873,614 B  (gzip 13,353,125 + 20 DTBs 9,520,489)
-output        : dist/boot-mi5-droidspaces.img (25,326,922 B)
-sha256        : 41cbe80b2baa84ef25f6c30e0c58112ba71e917bc586da08091a2282d2349092
+new Image     : 33,648,640 B  md5 368c15d56ea50bfee9cbe4e6e27b274a
+new kernel    : 22,246,944 B  (gzip 12,726,455 + 20 DTBs 9,520,489)
+output        : dist/boot-mi5-droidspaces.img (24,700,234 B)
+sha256        : b432b7da739de1a16faadf6d58a46fbf94f5b177e6b40d9fcc189e579297613b
 ```
+
+(reference local build; the released file's sha256 is the one in `SHA256SUMS.txt`)
 
 Only the gzip'ed `Image` is replaced inside the stock boot image; the 20 DTBs,
 the ramdisk, the second stage and the 1,354-byte Qualcomm certificate are copied
@@ -233,7 +295,7 @@ re-checks 26 invariants:
 ```
 PASS  boot magic / header version 0 / page size 4096
 PASS  kernel gzip stream complete
-PASS  kernel decompresses to Image  md5 6dfc8bb6c8d0daf8a9da58bd4374e436
+PASS  kernel decompresses to Image  md5 368c15d56ea50bfee9cbe4e6e27b274a
 PASS  DTB tail identical to template  9520489 B
 PASS  DTB tail parses as FDT chain  20 DTBs
 PASS  ramdisk bytes unchanged  md5 5484fc1797c908752f4574db87e80efb
@@ -242,7 +304,7 @@ PASS  certificate trailer unchanged  1354 B
 PASS  kernel_addr 0x80008000 / ramdisk_addr 0x81000000 / second_addr 0x80f00000
 PASS  tags_addr 0x80000100 / os_version 0x1000012a / board name / cmdline
 PASS  header id digest recomputed correctly
-PASS  fits 64 MiB boot partition  25326922 B
+PASS  fits 64 MiB boot partition  24700234 B
 result : PASS (0 failed)
 ```
 
@@ -250,9 +312,9 @@ result : PASS (0 failed)
 which is how the published file was re-checked after download:
 
 ```
-kernel_size  : 22875252 B (gzip 13354763 + dtb 9520489)
-Image        : 35735040 B
-Linux version 3.18.71-perf-g4a0ef96 (mi5@droidspaces) (gcc version 9.4.0 (Ubuntu 9.4.0-1ubuntu1~20.04.2) ) #1 SMP PREEMPT ...
+kernel_size  : 22246944 B (gzip 12726455 + dtb 9520489)
+Image        : 33648640 B
+Linux version 3.18.71-perf-g4a0ef96 (mi5@droidspaces) (gcc version 4.9.x 20150123 (prerelease) (GCC) ) #1 SMP PREEMPT ...
 vermagic     : 3.18.71-perf-g4a0ef96 SMP preempt mod_unload modversions aarch64
 ```
 
@@ -304,11 +366,11 @@ because the banner embeds the build time and the compiler patch level.
 ## 8. Reproducing in CI
 
 `.github/workflows/build.yml` runs the same scripts in an `ubuntu:20.04`
-container (the compiler version this tree was verified with), caches the kernel
-tarball and ccache, builds `release` and `probe` in parallel, runs the QEMU smoke
-test on the probe image, and uploads `dist/` as artifacts. Pushing a `v*` tag
-publishes a release with the boot image, `config-diff-release.txt`,
-`crc-release.txt`, `verify-boot.txt` and `qemu-serial.log`.
+container, caches the kernel tarball, the gcc 4.9 prebuilt and ccache, builds
+`release` and `probe` in parallel, runs the QEMU smoke test on the probe image,
+and uploads `dist/` as artifacts. Pushing a `v*` tag publishes a release with the
+boot image, `config-diff-release.txt`, `crc-release.txt`, `verify-boot.txt` and
+`qemu-serial.log`.
 
 ## 9. Flash and rollback
 

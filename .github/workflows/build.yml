@@ -1,7 +1,11 @@
 name: build
 
-# Builds the Mi 5 (gemini) kernel in a Ubuntu 20.04 container so the compiler
-# matches the version this tree was verified with (aarch64-linux-gnu-gcc 9.4).
+# Builds the Mi 5 (gemini) kernel in a Ubuntu 20.04 container.
+#
+# The kernel is compiled with the AOSP aarch64 gcc 4.9 prebuilt (the version
+# Xiaomi's own Image reports), fetched by scripts/fetch-toolchain.sh.  Building
+# this tree with the distro cross compiler (gcc 9.4) produces an Image that
+# hangs on the phone before console_init() — see docs/BUILD-AND-QEMU.md.
 #
 #   push to main / PR      -> build + upload artifacts
 #   tag v*                 -> build + publish a GitHub release
@@ -57,10 +61,21 @@ jobs:
             ca-certificates curl git \
             build-essential gcc-aarch64-linux-gnu \
             bc bison flex libssl-dev libelf-dev \
-            python3 patch cpio xz-utils gzip kmod \
+            python3 python-is-python3 patch cpio xz-utils gzip kmod \
             ccache qemu-system-arm
 
       - uses: actions/checkout@v4
+
+      # The AOSP gcc 4.9 wrapper starts with "#!/usr/bin/python", and the probe
+      # initramfs is a glibc static binary, hence both compilers above.
+      - name: Cache cross toolchain
+        uses: actions/cache@v4
+        with:
+          path: .work/aarch64-linux-android-4.9
+          key: toolchain-aarch64-linux-android-4.9-20150123
+
+      - name: Fetch cross toolchain
+        run: bash scripts/fetch-toolchain.sh
 
       - name: Cache kernel source tarball
         uses: actions/cache@v4
