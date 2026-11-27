@@ -92,7 +92,8 @@ def audit(path):
           % (gz[2], flg, flg & 1, flg >> 1 & 1, flg >> 2 & 1, flg >> 3 & 1, flg >> 4 & 1))
     print("    MTIME=%d XFL=%d OS=%d" % (struct.unpack("<I", gz[4:8])[0], gz[8], gz[9]))
     if len(gz) >= 18:
-        isize, crc = struct.unpack("<II", gz[-8:])
+        # the gzip trailer is CRC32 first, then ISIZE (both little endian)
+        crc, isize = struct.unpack("<II", gz[-8:])
         print("    ISIZE=%d (actual %d) %s, CRC32=0x%08x (actual 0x%08x) %s"
               % (isize, len(out), "ok" if isize == len(out) % 2 ** 32 else "BAD",
                  crc, zlib.crc32(out) & 0xffffffff,
